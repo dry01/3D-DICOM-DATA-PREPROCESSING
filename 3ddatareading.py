@@ -31,10 +31,10 @@ data_ids= next(os.walk(data_dir))[1]
 print(data_ids)
 print(len(data_ids))
 
-lstFilesDCM = []                                      # create an empty list
+lstFilesDCM = []                                      
 for dirName, subdirList, fileList in os.walk(data_dir):
     for filename in fileList:
-        if ".dcm" in filename.lower():                 # check whether the file's DICOM
+        if ".dcm" in filename.lower():                 
             lstFilesDCM.append(os.path.join(dirName,filename))
 
 RefDs = dicom.read_file(lstFilesDCM[0])
