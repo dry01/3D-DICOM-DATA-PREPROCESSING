@@ -27,8 +27,8 @@ INPUT_SIZE = 120 # Input feature width/height
 OUTPUT_SIZE = 120 # Output feature width/height (as defined by model)
 INPUT_DEPTH = 12 # Input depth 
 OFF_IMAGE_FILL = 0 # What to fill an image with if padding is required to make Tensor
-OFF_LABEL_FILL = 0 # What to fill a label with if padding is required to make Tensor
-OUTPUT_CLASSES = 4 # Number of output classes in dataset
+OFF_LABEL_FILL = 0 
+OUTPUT_CLASSES = 4 
 OUTPUT_DEPTH = 12
 
 LEARNING_RATE = 0.001 
