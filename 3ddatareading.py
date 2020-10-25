@@ -9,48 +9,44 @@ Original file is located at
 
 !pip install pydicom
 
-import numpy as np
-import pandas as pd
-from skimage.io import imread
-import seaborn as sns
+!pip install pynrrd
+
+# Commented out IPython magic to ensure Python compatibility.
+import numpy as np 
 import matplotlib.pyplot as plt
-
-import pydicom as dicom
+import matplotlib
+import tensorflow as tf
 import os
+import sys
+import pydicom as dicom
+import  nrrd
+import scipy.ndimage
+import scipy.misc
+import pickle
+import random
+# %matplotlib notebook
 
-from google.colab import drive
-drive.mount('/gdrive')
+def return_nrrd(file_path):
 
-data_dir = '/gdrive/My Drive/ pan/Pancreas-63502'
-patients = os.listdir(data_dir)
-for data in patients:
-   print (data)
+    out_nrrd = {}
+    for dirName, subdirList, fileList in os.walk(file_path):
+        for filename in fileList:
+            if ".nrrd" in filename.lower():
+                name = filename.split('_')[0] 
+                name = name.split('.')[0] 
+                out_nrrd[name] = os.path.join(dirName,filename)
+    return out_nrrd
 
-#print(len(os.listdir(data_dir + "Pancreas-63502")))
-data_ids= next(os.walk(data_dir))[1]
-print(data_ids)
-print(len(data_ids))
-
-lstFilesDCM = []                                      
-for dirName, subdirList, fileList in os.walk(data_dir):
-    for filename in fileList:
-        if ".dcm" in filename.lower():                 
-            lstFilesDCM.append(os.path.join(dirName,filename))
-
-RefDs = dicom.read_file(lstFilesDCM[0])
-ConstPixelDims = (int(RefDs.Rows), int(RefDs.Columns), len(lstFilesDCM))
-print(ConstPixelDims)
-
-#ConstPixelSpacing = (float(RefDs.PixelSpacing[0]), float(RefDs.PixelSpacing[1]), float(RefDs.SliceThickness))
-
-def return_dcm(file_path):
+def return_dcm(file_path, check_term = 'Prostate'):
     
     out_dcm = {}
     for dirName, subdirList, fileList in os.walk(file_path):
         c_dcm = []
         cur_name = ""
-        #dir_split = dirName.split("/")
-        
+        dir_split = dirName.split("/")
+        for f_chk in dir_split:
+            if check_term in f_chk:
+                cur_name = f_chk
         for filename in fileList:
             if ".dcm" in filename.lower():
                 name = int(os.path.splitext(filename)[0])
@@ -60,193 +56,121 @@ def return_dcm(file_path):
             out_dcm[cur_name] = [c[0] for c in c_dcm] 
     return out_dcm
 
-train = RefDs
+def get_dataset(data_dir, anns_dir):
+    
+    data_out = []
+    shapes = {}
+    d_dcm = return_dcm(data_dir)
+    d_nrrd = return_nrrd(anns_dir)
+    for i in d_nrrd:
+        seg, opts = nrrd.read(d_nrrd[i])
+        voxels = np.zeros(np.shape(seg))
+        for j in range(len(d_dcm[i])):
+            dicom_ref = dicom.read_file(d_dcm[i][j])
+            found = False
+            chk_val = dicom_ref[("0020", "0013")].value 
+          
+            if int(chk_val.__str__()) - 1 < np.shape(voxels)[-1]:
+                voxels[:, :, int(chk_val.__str__()) - 1] = dicom_ref.pixel_array
+            else: 
+                print('Index: ',str(int(chk_val.__str__()) - 1), ' too large for ', i, ' skipping!')
 
-def plot_slice(slice_in):
+        seg = scipy.ndimage.interpolation.rotate(seg, 90, reshape = False)
+        for i in range(np.shape(seg)[2]):
+            cur_img = np.squeeze(seg[:, :, i])
+            seg[:, :, i] = np.flipud(cur_img)
+        
+        if voxels.shape in shapes:
+            shapes[voxels.shape] += 1
+        else:
+            shapes[voxels.shape] = 1
+        
+        data_out.append((voxels, seg))
+    return data_out
+
+def plot_slice(slice_in, is_anns = False, num_anns = 4):
     
     slice_in = np.squeeze(slice_in)
     plt.figure()
     plt.set_cmap(plt.bone())
-    
-    plt.pcolormesh(slice_in)
+    if is_anns:
+        plt.pcolormesh(slice_in, vmin = 0, vmax = num_anns - 1)
+    else:
+        plt.pcolormesh(slice_in)
     plt.show()
 
-def rotate_data(voxels, lbls, theta = None):
-
-    if theta is None:
-        theta = random.randint(-10, 10)
-    vox_new = scipy.ndimage.interpolation.rotate(voxels, theta, reshape = False)
-    lbl_new = scipy.ndimage.interpolation.rotate(lbls, theta, reshape = False)
-    return vox_new, lbl_new
-
-def scale_and_crop_centre(voxels, lbls):
+def multi_slice_viewer(feats, anns = None, preds = None, num_classes = 4):
     
-    o_s = voxels.shape
-    r_s = [0]*len(o_s)
-    scale_factor = random.uniform(1, 1.2)
-    vox_zoom = scipy.ndimage.interpolation.zoom(voxels, scale_factor, order = 1)
-    lbl_zoom = scipy.ndimage.interpolation.zoom(lbls, scale_factor, order = 0)
-    new_shape = vox_zoom.shape
-    
-    for i in range(len(o_s)):
-        if new_shape[i] == 1: 
-            r_s[i] = 0
-            continue
-        r_c = int(((new_shape[i] - o_s[i]) - 1)/2)
-        r_s[i] = r_c
-    r_e = [r_s[i] + o_s[i] for i in list(range(len(o_s)))]
-    vox_zoom = vox_zoom[r_s[0]:r_e[0], r_s[1]:r_e[1], r_s[2]:r_e[2]]
-    lbl_zoom = lbl_zoom[r_s[0]:r_e[0], r_s[1]:r_e[1], r_s[2]:r_e[2]]
-    return vox_zoom, lbl_zoom
-
-def grayscale(voxels, lbls):
-  
-    aug = random.randint(-10, 10)
-    smp = np.random.normal(0, 1, size = np.shape(voxels))
-    voxels = voxels + aug*smp
-    voxels[voxels <= 0] = 0
-    voxels[voxels > 500] = 500 
-    return voxels, lbls
-
-def sample_with_p(p):
-  
-    if random.random() < p:
-        return True
+    if anns is None:
+        fig, ax = plt.subplots()
+        ax.volume = feats
+        ax.index = feats.shape[-1] // 2
+        ax.imshow(feats[:, :, ax.index],  cmap='bone')
+        fig.canvas.mpl_connect('key_press_event', process_key)
     else:
-        return False
+        if preds is None:
+            fig, axarr = plt.subplots(1, 2)
+            plt.tight_layout()
+            axarr[0].volume = feats
+            axarr[0].index = 0
+            axarr[0].imshow(feats[:, :, axarr[0].index],  cmap='bone')
+            axarr[0].set_title('Scans')
+            axarr[1].volume = anns
+            axarr[1].index = 0
+            axarr[1].imshow(anns[:, :, axarr[1].index],  cmap='bone', vmin = 0, vmax = num_classes)
+            axarr[1].set_title('Annotations')
+            fig.canvas.mpl_connect('key_press_event', process_key)
+        else:
+            fig, axarr = plt.subplots(1, 3)
+            plt.tight_layout()
+            axarr[0].volume = feats
+            axarr[0].index = 0
+            axarr[0].imshow(feats[:, :, axarr[0].index],  cmap='bone')
+            axarr[0].set_title('Scans')
+            axarr[1].volume = anns
+            axarr[1].index = 0
+            axarr[1].imshow(anns[:, :, axarr[1].index],  cmap='bone', vmin = 0, vmax = num_classes)
+            axarr[1].set_title('Annotations')
+            axarr[2].volume = preds
+            axarr[2].index = 0
+            axarr[2].imshow(preds[:, :, axarr[2].index],  cmap='bone', vmin = 0, vmax = num_classes)
+            axarr[2].set_title('Predictions')
+            fig.canvas.mpl_connect('key_press_event', process_key)
 
-def get_random_perturbation(voxels, lbls):
+def process_key(event):
     
-    p_rotate = 0.6
-    p_scale = 0.5
-    p_gray = 0.6
-    cur_vox, cur_lbl = voxels, lbls
-    if sample_with_p(p_rotate):
-        cur_vox, cur_lbl = rotate_data(cur_vox, cur_lbl)
-    if sample_with_p(p_scale):
-        cur_vox, cur_lbl = scale_and_crop_centre(cur_vox, cur_lbl)
-    if sample_with_p(p_gray):
-        cur_vox, cur_lbl = grayscale(cur_vox, cur_lbl)
-    return cur_vox, cur_lbl
+    fig = event.canvas.figure
+    if event.key == 'j':
+        for ax in fig.axes: 
+            previous_slice(ax)
+    elif event.key == 'k':
+        for ax in fig.axes: 
+            next_slice(ax)            
+    fig.canvas.draw()
 
-INPUT_SIZE = 120 
-OUTPUT_SIZE = 120
-INPUT_DEPTH = 12 
-OFF_IMAGE_FILL = 0 
-OFF_LABEL_FILL = 0 
-OUTPUT_CLASSES = 4
+def previous_slice(ax):
+    """ previous slice."""
+    volume = ax.volume
+    ax.index = (ax.index - 1) % volume.shape[-1]  
+    ax.images[0].set_array(volume[:, :, ax.index])
 
-OUTPUT_DEPTH = 12
+def next_slice(ax):
+    """ next slice."""
+    volume = ax.volume
+    ax.index = (ax.index + 1) % volume.shape[-1]
+    ax.images[0].set_array(volume[:, :, ax.index])
 
-def get_scaled_input(data, min_i = INPUT_SIZE, min_o = OUTPUT_SIZE, depth = INPUT_DEPTH, 
-                    depth_out = OUTPUT_DEPTH, image_fill = OFF_IMAGE_FILL, 
-                    label_fill = OFF_LABEL_FILL, n_classes = OUTPUT_CLASSES, norm_max = 500):
-    input_scale_factor = min_i/data[0].shape[0]
-    output_scale_factor = min_o/data[0].shape[0]
+from google.colab import drive
+drive.mount('/gdrive')
 
-    vox_zoom = None
-    lbl_zoom = None
+data_leader_dir = '/gdrive/My Drive/ ISBI- 2013/Leaderboard data'
+anns_leader_dir = '/gdrive/My Drive/ ISBI- 2013/Leaderboard'
+data_test_dir = '/gdrive/My Drive/ ISBI- 2013/test data'
+anns_test_dir = '/gdrive/My Drive/ ISBI- 2013/Test 2'
+data_train_dir = '/gdrive/My Drive/ ISBI- 2013/training data'
+anns_train_dir = '/gdrive/My Drive/ ISBI- 2013/Training'
 
-    if not input_scale_factor == 1:
-        vox_zoom = scipy.ndimage.interpolation.zoom(data[0], input_scale_factor, order = 1) 
-      
-    else:
-        vox_zoom = data[0]
+#train = get_dataset(data_train_dir, anns_train_dir)
+test = get_dataset(data_test_dir, anns_test_dir)
+#train = train + get_dataset(data_leader_dir, anns_leader_dir)
 
-    if not output_scale_factor == 1:
-        lbl_zoom = scipy.ndimage.interpolation.zoom(data[1], output_scale_factor, order = 0) 
-        
-    else:
-        lbl_zoom = data[1]   
-
-    lbl_pad = label_fill*np.ones((min_o, min_o, depth_out - lbl_zoom.shape[-1]))
-    lbl_zoom = np.concatenate((lbl_zoom, lbl_pad), 2)
-    lbl_zoom = lbl_zoom[np.newaxis, :, :, :]
-    
-    vox_pad = image_fill*np.ones((min_i, min_i, depth - vox_zoom.shape[-1]))
-    vox_zoom = np.concatenate((vox_zoom, vox_pad), 2)
-    
-    max_val = np.max(vox_zoom)
-    if not np.max(vox_zoom) == 0:
-        vox_zoom = vox_zoom * norm_max/np.max(vox_zoom)
-        
-    vox_zoom = vox_zoom[np.newaxis, :, :, :]
-
-    vox_zoom = np.swapaxes(vox_zoom, 0, -1)
-    lbl_zoom = np.swapaxes(lbl_zoom, 0, -1)
-    
-        
-    return vox_zoom, lbl_zoom
-
-def upscale_segmentation(lbl, shape_desired):
-    
-    
-    scale_factor = shape_desired[0]/lbl.shape[0]
-    lbl_upscale = scipy.ndimage.interpolation.zoom(lbl, scale_factor, order = 0)
-    
-    lbl_upscale = lbl_upscale[:, :, :shape_desired[-1]]
-    if lbl_upscale.shape[-1] < shape_desired[-1]:
-        pad_zero = OFF_LABEL_FILL*np.zeros((shape_desired[0], shape_desired[1], shape_desired[2] - lbl_upscale.shape[-1]))
-        lbl_upscale = np.concatenate((lbl_upscale, pad_zero), axis = -1)
-    return lbl_upscale
-
-def get_label_accuracy(pred, lbl_original):
-    
-    pred = swap_axes(pred)
-    pred_upscale = upscale_segmentation(pred, np.shape(lbl_original))
-    return 100*np.sum(np.equal(pred_upscale, lbl_original))/np.prod(lbl_original.shape)
-
-def get_mean_iou(pred, lbl_original, num_classes = OUTPUT_CLASSES, ret_full = False, reswap = False):
-  
-    
-    
-    pred = swap_axes(pred)
-    if reswap:
-        lbl_original = swap_axes(lbl_original)
-    pred_upscale = upscale_segmentation(pred, np.shape(lbl_original))
-    iou = [1]*num_classes
-    for i in range(num_classes): 
-        test_shape = np.zeros(np.shape(lbl_original))
-        test_shape[pred_upscale == i] = 1
-        test_shape[lbl_original == i] = 1
-        full_sum = int(np.sum(test_shape))
-        test_shape = -1*np.ones(np.shape(lbl_original))
-        test_shape[lbl_original == i] = pred_upscale[lbl_original == i]
-        t_p = int(np.sum(test_shape == i))
-        if not full_sum == 0:
-            iou[i] = t_p/full_sum
-    if ret_full:
-        return iou
-    else: 
-        return np.mean(iou)
-
-def swap_axes(pred):
-    
-    pred = np.swapaxes(pred, -1, 0)
-    pred = np.squeeze(pred)
-    return pred
-
-train_run = []
-augment_len = 0 
-for i in train:
-    (vox, lbl) = get_scaled_input(i)
-    train_run.append((vox, lbl))
-    for j in range(augment_len):
-        vox_a, lbl_a = get_random_perturbation(vox, lbl)
-        train_run.append((vox_a, lbl_a))
-
-def get_dataset_sample(data, size, no_perturb = False):
-    
-    x_y_data = random.sample(data, size)
-    x = []
-    y = []
-    orig_y = []
-    for entry in x_y_data:
-        x_cur, y_cur = get_random_perturbation(entry[0], entry[1])
-        if no_perturb:
-            x_cur, y_cur = entry
-        orig_y.append(np.copy(y_cur))
-        x_cur, y_cur = get_scaled_input((x_cur, y_cur))
-        x.append(x_cur)
-        y.append(y_cur)
-    return x, y, orig_y
